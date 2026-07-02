@@ -1,17 +1,17 @@
 """
-gateway.py — Discord Gateway WebSocket Handler
-===============================================
+gateway.py — Discord Gateway WebSocket Handler (ELITE v4.0)
+============================================================
 
-Full-featured WebSocket Gateway client supporting:
-  - IDENTIFY & RESUME flow
-  - Automatic heartbeat with ACK tracking
-  - zlib-stream compression (same as real Discord client)
-  - Auto-reconnect with exponential backoff
-  - Typed event system (decorator + listener registration)
-  - Voice state updates
-  - Presence updates
-  - Request guild members
-  - Lazy guild loading
+Production-grade WebSocket Gateway client supporting:
+  - Optimized IDENTIFY & RESUME flow with adaptive backoff
+  - Heartbeat with latency tracking & ACK verification
+  - zlib-stream compression with buffer optimization
+  - Auto-reconnect with exponential backoff & jitter
+  - Advanced event system (persistent, one-shot listeners)
+  - Voice state, presence, and activity management
+  - Guild member requests & lazy loading
+  - Comprehensive logging & health monitoring
+  - Session state management & recovery
 
 WARNING:
     Self-bot gateway connections are especially risky. Discord may detect
@@ -217,20 +217,38 @@ class Gateway:
         self._last_heartbeat_ack: float = 0.0
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._receive_task: Optional[asyncio.Task] = None
+        
+        # Adaptive reconnect backoff
         self._reconnect_delay: float = 1.0
-
-        # zlib decompression
+        self._reconnect_count: int = 0
+        self._max_reconnect_delay: float = 120.0
+        self._last_reconnect_time: float = 0.0
+        self._connection_start_time: float = 0.0
+        
+        # Heartbeat health tracking
+        self._heartbeat_acks_missed: int = 0
+        self._max_missed_acks: int = 3
+        self._last_latency: float = 0.0
+        self._latency_history: List[float] = []
+        self._max_history_size: int = 10
+        
+        # zlib decompression (optimized)
         self._zlib_decompressor = zlib.decompressobj()
         self._buffer = bytearray()
         self._ZLIB_SUFFIX = b"\x00\x00\xff\xff"
+        self._decompress_lock = asyncio.Lock()
 
-        # Event system
+        # Event system (optimized)
         self._listeners: Dict[str, List[EventCallback]] = {}
         self._once_listeners: Dict[str, List[EventCallback]] = {}
+        self._listener_lock = asyncio.Lock()
+        self._event_queue: asyncio.Queue[tuple[str, Dict]] = asyncio.Queue(maxsize=1000)
+        self._event_dispatcher_task: Optional[asyncio.Task] = None
 
         # Ready state
         self._ready: bool = False
         self._user: Optional[Dict[str, Any]] = None
+        self._guilds_loaded: int = 0
 
     # ─── Properties ──────────────────────────────────────────────────────────
 
@@ -262,9 +280,33 @@ class Gateway:
         return 0.0
 
     @property
+    def avg_latency(self) -> float:
+        """Average latency from last 10 heartbeats (in seconds)."""
+        if not self._latency_history:
+            return 0.0
+        return sum(self._latency_history) / len(self._latency_history)
+
+    @property
     def user(self) -> Optional[Dict[str, Any]]:
         """The authenticated user dict from READY, or None."""
         return self._user
+
+    @property
+    def reconnect_count(self) -> int:
+        """Total number of reconnection attempts."""
+        return self._reconnect_count
+
+    @property
+    def heartbeat_acks_missed(self) -> int:
+        """Number of missed heartbeat ACKs since last connection."""
+        return self._heartbeat_acks_missed
+
+    @property
+    def connection_uptime(self) -> float:
+        """Seconds since connection established (0 if not connected)."""
+        if not self._connected:
+            return 0.0
+        return time.monotonic() - self._connection_start_time
 
     # ─── Event Registration ──────────────────────────────────────────────────
 
@@ -342,6 +384,7 @@ class Gateway:
         """
         gateway_url = url or self._resume_url or GATEWAY_URL
         self._reconnect_delay = 1.0
+        self._reconnect_count = 0
 
         while True:
             try:
@@ -358,12 +401,20 @@ class Gateway:
                 if not self.auto_reconnect:
                     break
 
-            # Wait before reconnecting
-            jitter = random.uniform(0, self._reconnect_delay * 0.2)
-            delay = self._reconnect_delay + jitter
-            logger.info("Reconnecting in %.2fs…", delay)
+            # Adaptive backoff: exponential with jitter + cap
+            self._reconnect_count += 1
+            jitter = random.uniform(0, 0.1 * self._reconnect_delay)
+            delay = min(
+                self._reconnect_delay * (2 ** (self._reconnect_count - 1)),
+                self._max_reconnect_delay
+            ) + jitter
+            
+            logger.info(
+                "Reconnecting in %.2fs (attempt %d)…",
+                delay,
+                self._reconnect_count
+            )
             await asyncio.sleep(delay)
-            self._reconnect_delay = min(self._reconnect_delay * 2, 60.0)
 
     async def _run_connection(self, url: str) -> None:
         """Run a single WebSocket connection session."""
@@ -378,51 +429,68 @@ class Gateway:
             "Origin": "https://discord.com",
         }
 
-        async with websockets.connect(  # type: ignore[attr-defined]
-            url,
-            max_size=None,
-            ping_interval=None,  # We handle heartbeats manually
-            close_timeout=10,
-            additional_headers=extra_headers,
-        ) as ws:
-            self._ws = ws
-            self._connected = True
-            # Reset zlib state for new connection
-            self._zlib_decompressor = zlib.decompressobj()
-            self._buffer = bytearray()
-            logger.info("Gateway WebSocket connected")
+        try:
+            async with websockets.connect(  # type: ignore[attr-defined]
+                url,
+                max_size=None,
+                ping_interval=None,  # We handle heartbeats manually
+                close_timeout=10,
+                additional_headers=extra_headers,
+            ) as ws:
+                self._ws = ws
+                self._connected = True
+                self._connection_start_time = time.monotonic()
+                self._heartbeat_acks_missed = 0
+                self._latency_history.clear()
+                
+                # Reset zlib state for new connection
+                self._zlib_decompressor = zlib.decompressobj()
+                self._buffer = bytearray()
+                
+                logger.info("Gateway WebSocket connected")
 
-            try:
-                async for message in ws:
-                    await self._handle_raw(message)
-            except WSConnectionClosed as exc:
-                code = getattr(exc, "code", 1000)
-                reason = getattr(exc, "reason", "")
-                await self._handle_close(code, reason)
-            finally:
-                self._connected = False
-                await self._cancel_tasks()
+                # Start event dispatcher
+                self._event_dispatcher_task = asyncio.create_task(self._event_dispatch_loop())
+
+                try:
+                    async for message in ws:
+                        await self._handle_raw(message)
+                except WSConnectionClosed as exc:
+                    code = getattr(exc, "code", 1000)
+                    reason = getattr(exc, "reason", "")
+                    await self._handle_close(code, reason)
+                finally:
+                    self._connected = False
+                    await self._cancel_tasks()
+        except Exception as e:
+            logger.error(f"WebSocket connection error: {e}")
+            raise
 
     # ─── Message Handling ─────────────────────────────────────────────────────
 
     async def _handle_raw(self, raw: Union[str, bytes]) -> None:
-        """Decompress and parse a raw WebSocket message."""
+        """Decompress and parse a raw WebSocket message (optimized zlib)."""
         if isinstance(raw, bytes):
             self._buffer.extend(raw)
             if len(raw) >= 4 and raw[-4:] == self._ZLIB_SUFFIX:
                 try:
-                    data = self._zlib_decompressor.decompress(self._buffer)
+                    # Use lock for thread-safe zlib decompression
+                    async with self._decompress_lock:
+                        data = self._zlib_decompressor.decompress(self._buffer)
                     self._buffer = bytearray()
                     await self._handle_json(data.decode("utf-8"))
                 except zlib.error as exc:
                     logger.warning("zlib decompression failed: %s", exc)
+                    self._buffer = bytearray()
+                except Exception as exc:
+                    logger.error(f"Error decompressing: {exc}")
                     self._buffer = bytearray()
             # Otherwise accumulate and wait for ZLIB suffix
         else:
             await self._handle_json(raw)
 
     async def _handle_json(self, text: str) -> None:
-        """Parse JSON payload and dispatch to opcode handler."""
+        """Parse JSON payload and queue to event dispatcher."""
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -437,12 +505,13 @@ class Gateway:
         if s is not None:
             self._sequence = s
 
+        # Dispatch to opcode handler
         await self._dispatch_opcode(op, d, t)
 
     async def _dispatch_opcode(
         self, op: int, data: Any, event_name: Optional[str]
     ) -> None:
-        """Route gateway opcodes to their handlers."""
+        """Route gateway opcodes to their handlers with health tracking."""
         if op == GatewayOpcode.HELLO:
             await self._on_hello(data)
 
@@ -454,8 +523,20 @@ class Gateway:
             await self._send_heartbeat()
 
         elif op == GatewayOpcode.HEARTBEAT_ACK:
+            # Track latency and health
             self._last_heartbeat_ack = time.monotonic()
-            logger.debug("Heartbeat ACK received (latency=%.1fms)", self.latency * 1000)
+            latency = self.latency
+            self._last_latency = latency
+            self._latency_history.append(latency)
+            if len(self._latency_history) > self._max_history_size:
+                self._latency_history.pop(0)
+            
+            self._heartbeat_acks_missed = 0
+            logger.debug(
+                "Heartbeat ACK received (latency=%.1fms, avg=%.1fms)",
+                latency * 1000,
+                self.avg_latency * 1000
+            )
 
         elif op == GatewayOpcode.RECONNECT:
             logger.info("Server requested RECONNECT")
@@ -493,7 +574,7 @@ class Gateway:
             await self._send_identify()
 
     async def _on_dispatch(self, event: Optional[str], data: Any) -> None:
-        """Handle op 0 DISPATCH — update state and emit to listeners."""
+        """Handle op 0 DISPATCH — update state and queue for event dispatch."""
         if event is None:
             return
 
@@ -502,7 +583,7 @@ class Gateway:
             self._resume_url = data.get("resume_gateway_url")
             self._user = data.get("user")
             self._ready = True
-            self._reconnect_delay = 1.0
+            self._reconnect_count = 0
             logger.info(
                 "READY — session=%s user=%s",
                 self._session_id,
@@ -510,9 +591,17 @@ class Gateway:
             )
 
         elif event == EventType.RESUMED:
-            logger.info("Gateway session RESUMED")
+            logger.info("Gateway session RESUMED (uptime=%.1fs)", self.connection_uptime)
 
-        await self._emit(event, data)
+        elif event == EventType.GUILD_CREATE:
+            self._guilds_loaded += 1
+            logger.debug("Guild created (total=%d)", self._guilds_loaded)
+
+        # Queue event for async dispatch
+        try:
+            self._event_queue.put_nowait((event, data))
+        except asyncio.QueueFull:
+            logger.warning("Event queue full, dropping %s event", event)
 
     async def _handle_close(self, code: int, reason: str) -> None:
         """Handle WebSocket close — determine if reconnectable."""
@@ -534,13 +623,27 @@ class Gateway:
     # ─── Heartbeat ────────────────────────────────────────────────────────────
 
     async def _heartbeat_loop(self) -> None:
-        """Send heartbeats at the HELLO-specified interval."""
+        """Send heartbeats at the HELLO-specified interval with health tracking."""
         # Initial heartbeat jitter (rand(0, interval) per Discord spec)
         await asyncio.sleep(random.uniform(0, self._heartbeat_interval))
 
         while self._connected:
             try:
                 await self._send_heartbeat()
+                
+                # Check if we're missing ACKs (connection health)
+                if self._heartbeat_acks_missed >= self._max_missed_acks:
+                    logger.error(
+                        "Too many missed heartbeat ACKs (%d/%d), force reconnecting",
+                        self._heartbeat_acks_missed,
+                        self._max_missed_acks
+                    )
+                    if self._ws:
+                        await self._ws.close(1000)
+                    break
+                
+                self._heartbeat_acks_missed += 1
+                
                 await asyncio.sleep(self._heartbeat_interval)
             except asyncio.CancelledError:
                 break
@@ -549,10 +652,10 @@ class Gateway:
                 break
 
     async def _send_heartbeat(self) -> None:
-        """Send a HEARTBEAT payload."""
+        """Send a HEARTBEAT payload with timing."""
         self._last_heartbeat_sent = time.monotonic()
         await self._send({"op": GatewayOpcode.HEARTBEAT, "d": self._sequence})
-        logger.debug("Heartbeat sent (seq=%s)", self._sequence)
+        logger.debug("Heartbeat sent (seq=%s, uptime=%.1fs)", self._sequence, self.connection_uptime)
 
     # ─── Sending ─────────────────────────────────────────────────────────────
 
@@ -607,30 +710,75 @@ class Gateway:
 
     # ─── Emit ─────────────────────────────────────────────────────────────────
 
+    async def _event_dispatch_loop(self) -> None:
+        """Background task that dispatches queued events to listeners."""
+        while self._connected:
+            try:
+                event, data = await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=1.0
+                )
+                await self._emit(event, data)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in event dispatcher: {e}")
+
     async def _emit(self, event: str, data: Any) -> None:
-        """Dispatch *data* to all listeners registered for *event*."""
+        """Dispatch *data* to all listeners registered for *event* (optimized)."""
         key = event.upper()
 
-        # Persistent listeners
-        for cb in list(self._listeners.get(key, [])):
+        # Get persistent listeners
+        persistent = list(self._listeners.get(key, []))
+        once_cbs = self._once_listeners.pop(key, [])
+
+        if not persistent and not once_cbs:
+            return
+
+        # Execute all handlers concurrently
+        tasks = []
+        
+        for cb in persistent:
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    await cb(data)
+                    tasks.append(self._safe_call_handler(cb, data, event))
                 else:
                     cb(data)
             except Exception as exc:
-                logger.error("Error in listener for %s: %s", event, exc, exc_info=True)
+                logger.error("Error in listener for %s: %s", event, exc)
 
-        # One-shot listeners
-        once_cbs = self._once_listeners.pop(key, [])
         for cb in once_cbs:
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    await cb(data)
+                    tasks.append(self._safe_call_handler(cb, data, event))
                 else:
                     cb(data)
             except Exception as exc:
-                logger.error("Error in once-listener for %s: %s", event, exc, exc_info=True)
+                logger.error("Error in once-listener for %s: %s", event, exc)
+
+        # Wait for all async tasks
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _safe_call_handler(
+        self,
+        handler: Callable,
+        data: Any,
+        event: str
+    ) -> None:
+        """Safely call async event handler with error handling."""
+        try:
+            await handler(data)
+        except Exception as exc:
+            logger.error(
+                "Error in %s handler %s: %s",
+                event,
+                getattr(handler, "__name__", "unknown"),
+                exc,
+                exc_info=True
+            )
 
     # ─── Gateway Commands ─────────────────────────────────────────────────────
 
@@ -833,11 +981,16 @@ class Gateway:
                 pass
             self._ws = None
 
-        logger.info("Gateway closed by client (code=%d)", code)
+        logger.info(
+            "Gateway closed by client (code=%d, reconnects=%d, uptime=%.1fs)",
+            code,
+            self._reconnect_count,
+            self.connection_uptime
+        )
 
     async def _cancel_tasks(self) -> None:
-        """Cancel heartbeat and receive tasks."""
-        for task in (self._heartbeat_task, self._receive_task):
+        """Cancel heartbeat, receive, and event dispatcher tasks."""
+        for task in (self._heartbeat_task, self._receive_task, self._event_dispatcher_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -846,6 +999,7 @@ class Gateway:
                     pass
         self._heartbeat_task = None
         self._receive_task = None
+        self._event_dispatcher_task = None
 
     async def __aenter__(self) -> "Gateway":
         return self
