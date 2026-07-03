@@ -51,7 +51,7 @@ from .utils import generate_nonce
 
 __all__: list[str] = ["HTTPClient", "Route"]
 
-logger = logging.getLogger("disapi.http")
+logger = logging.getLogger("dapi.http")
 
 
 # ─── Route ────────────────────────────────────────────────────────────────────
@@ -123,18 +123,29 @@ class HTTPClient:
         max_retries: int = DEFAULT_RATE_LIMIT_RETRIES,
         proxy: Optional[str] = None,
         build_number: Optional[int] = None,
+        fingerprint_rotation: bool = True,
+        rotation_interval: int = 100,
     ) -> None:
         self.token = token
         self.timeout = timeout
         self.max_retries = max_retries
         self.proxy = proxy
+        self.fingerprint_rotation = fingerprint_rotation
+        self.rotation_interval = rotation_interval
 
         self._rate_limiter = RateLimiter(max_retries=max_retries)
         self._session: Optional[httpx.AsyncClient] = None
         self._session_lock = asyncio.Lock()
 
-        # Build static headers once (UA/super-properties refreshed per request)
+        # Fingerprinting rotation
+        self._request_count = 0
         self._super_properties = get_super_properties(build_number) if build_number else get_super_properties()
+        self._fingerprint_pool: List[str] = []
+        self._current_fingerprint_index = 0
+        
+        # Initialize fingerprint pool if rotation is enabled
+        if self.fingerprint_rotation:
+            self._initialize_fingerprint_pool(build_number)
 
     # ─── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -162,6 +173,24 @@ class HTTPClient:
                     )
         return self._session
 
+    def _initialize_fingerprint_pool(self, build_number: Optional[int] = None) -> None:
+        """Initialize a pool of different fingerprints for rotation."""
+        self._fingerprint_pool = [self._super_properties]
+        # Generate additional fingerprints with slight variations
+        for _ in range(4):  # Pool of 5 fingerprints
+            self._fingerprint_pool.append(get_super_properties(build_number))
+        self._current_fingerprint_index = 0
+        logger.debug(f"Initialized fingerprint pool with {len(self._fingerprint_pool)} fingerprints")
+    
+    def _rotate_fingerprint(self) -> None:
+        """Rotate to the next fingerprint in the pool."""
+        if not self.fingerprint_rotation or not self._fingerprint_pool:
+            return
+        
+        self._current_fingerprint_index = (self._current_fingerprint_index + 1) % len(self._fingerprint_pool)
+        self._super_properties = self._fingerprint_pool[self._current_fingerprint_index]
+        logger.debug(f"Rotated fingerprint to index {self._current_fingerprint_index}")
+    
     async def close(self) -> None:
         """Close the underlying HTTP session and release connections."""
         if self._session and not self._session.is_closed:
@@ -194,9 +223,10 @@ class HTTPClient:
         Returns:
             Complete headers dict.
         """
-        # Refresh fingerprint ~10% of the time to vary headers naturally
-        if refresh_fingerprint or random.random() < 0.1:
-            self._super_properties = get_super_properties()
+        # Rotate fingerprint based on request count or explicit refresh
+        self._request_count += 1
+        if refresh_fingerprint or (self.fingerprint_rotation and self._request_count % self.rotation_interval == 0):
+            self._rotate_fingerprint()
 
         headers = get_default_headers()
         headers["Authorization"] = self.token

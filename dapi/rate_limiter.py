@@ -36,7 +36,7 @@ __all__: list[str] = [
     "rate_limit_bucket",
 ]
 
-logger = logging.getLogger("disapi.ratelimit")
+logger = logging.getLogger("dapi.ratelimit")
 
 
 # ─── Bucket Helpers ───────────────────────────────────────────────────────────

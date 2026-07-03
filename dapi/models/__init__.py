@@ -5,14 +5,16 @@ models/__init__.py — Public Models Package
 from .user import User, Member
 from .message import (
     Message,
+    Attachment,
+    Reaction,
+    MessageReference,
+)
+from .embed import (
     Embed,
     EmbedField,
     EmbedAuthor,
     EmbedFooter,
     EmbedImage,
-    Attachment,
-    Reaction,
-    MessageReference,
 )
 from .guild import Guild, Role, Ban, Invite
 from .channel import Channel, PermissionOverwrite, ThreadMetadata

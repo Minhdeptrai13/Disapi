@@ -10,305 +10,20 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..utils import snowflake_to_datetime
 from .user import User, Member
+from .embed import Embed
+from .channel import Channel
 
 
 __all__: list[str] = [
     "Message",
-    "Embed",
-    "EmbedField",
-    "EmbedAuthor",
-    "EmbedFooter",
-    "EmbedImage",
     "Attachment",
     "Reaction",
     "MessageReference",
+    "MessageChannel",
 ]
 
 
-# ─── Embed Sub-Structures ─────────────────────────────────────────────────────
-
-@dataclass
-class EmbedField:
-    """One field in an embed."""
-    name: str
-    value: str
-    inline: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "value": self.value, "inline": self.inline}
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EmbedField":
-        return cls(name=d["name"], value=d["value"], inline=d.get("inline", False))
-
-
-@dataclass
-class EmbedAuthor:
-    """Embed author section."""
-    name: str
-    url: Optional[str] = None
-    icon_url: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"name": self.name}
-        if self.url:
-            d["url"] = self.url
-        if self.icon_url:
-            d["icon_url"] = self.icon_url
-        return d
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EmbedAuthor":
-        return cls(name=d.get("name", ""), url=d.get("url"), icon_url=d.get("icon_url"))
-
-
-@dataclass
-class EmbedFooter:
-    """Embed footer section."""
-    text: str
-    icon_url: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"text": self.text}
-        if self.icon_url:
-            d["icon_url"] = self.icon_url
-        return d
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EmbedFooter":
-        return cls(text=d.get("text", ""), icon_url=d.get("icon_url"))
-
-
-@dataclass
-class EmbedImage:
-    """Embed image / thumbnail."""
-    url: str
-    proxy_url: Optional[str] = None
-    height: Optional[int] = None
-    width: Optional[int] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"url": self.url}
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EmbedImage":
-        return cls(
-            url=d.get("url", ""),
-            proxy_url=d.get("proxy_url"),
-            height=d.get("height"),
-            width=d.get("width"),
-        )
-
-
-# ─── Embed ────────────────────────────────────────────────────────────────────
-
-class Embed:
-    """Represents a Discord message embed.
-
-    Provides a builder-style API for constructing embeds.
-
-    Example:
-        embed = (
-            Embed(title="Hello!", color=0x5865F2)
-            .set_description("This is an embed.")
-            .set_author("disapi", icon_url="https://...")
-            .add_field("Field 1", "Value 1", inline=True)
-            .add_field("Field 2", "Value 2", inline=True)
-            .set_footer("Footer text")
-        )
-        await client.messages.send(channel_id, embed=embed)
-
-    Attributes:
-        title: Embed title (max 256 chars).
-        description: Embed description (max 4096 chars).
-        url: URL that the title links to.
-        color: Integer colour (hex e.g. 0x5865F2).
-        timestamp: ISO8601 timestamp string.
-        author: ``EmbedAuthor`` object.
-        footer: ``EmbedFooter`` object.
-        image: ``EmbedImage`` object.
-        thumbnail: ``EmbedImage`` object.
-        fields: List of ``EmbedField`` objects.
-    """
-
-    __slots__ = (
-        "title", "description", "url", "color", "timestamp",
-        "author", "footer", "image", "thumbnail", "fields",
-    )
-
-    def __init__(
-        self,
-        *,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        url: Optional[str] = None,
-        color: Optional[int] = None,
-        colour: Optional[int] = None,
-        timestamp: Optional[Union[datetime, str]] = None,
-    ) -> None:
-        self.title = title
-        self.description = description
-        self.url = url
-        self.color = color or colour
-        self.timestamp: Optional[str]
-        if isinstance(timestamp, datetime):
-            self.timestamp = timestamp.isoformat()
-        else:
-            self.timestamp = timestamp
-        self.author: Optional[EmbedAuthor] = None
-        self.footer: Optional[EmbedFooter] = None
-        self.image: Optional[EmbedImage] = None
-        self.thumbnail: Optional[EmbedImage] = None
-        self.fields: List[EmbedField] = []
-
-    # Builder methods
-
-    def set_title(self, title: str) -> "Embed":
-        """Set the embed title (max 256 chars)."""
-        self.title = title[:256]
-        return self
-
-    def set_description(self, description: str) -> "Embed":
-        """Set the embed description (max 4096 chars)."""
-        self.description = description[:4096]
-        return self
-
-    def set_url(self, url: str) -> "Embed":
-        """Set the URL the title links to."""
-        self.url = url
-        return self
-
-    def set_color(self, color: int) -> "Embed":
-        """Set the embed colour as an integer (e.g. 0x5865F2)."""
-        self.color = color
-        return self
-
-    set_colour = set_color
-
-    def set_timestamp(self, dt: Optional[datetime] = None) -> "Embed":
-        """Set the embed timestamp (defaults to now)."""
-        from datetime import timezone
-        ts = dt or datetime.now(tz=timezone.utc)
-        self.timestamp = ts.isoformat()
-        return self
-
-    def set_author(
-        self,
-        name: str,
-        url: Optional[str] = None,
-        icon_url: Optional[str] = None,
-    ) -> "Embed":
-        """Set the embed author section."""
-        self.author = EmbedAuthor(name=name[:256], url=url, icon_url=icon_url)
-        return self
-
-    def set_footer(
-        self,
-        text: str,
-        icon_url: Optional[str] = None,
-    ) -> "Embed":
-        """Set the embed footer."""
-        self.footer = EmbedFooter(text=text[:2048], icon_url=icon_url)
-        return self
-
-    def set_image(self, url: str) -> "Embed":
-        """Set the main embed image."""
-        self.image = EmbedImage(url=url)
-        return self
-
-    def set_thumbnail(self, url: str) -> "Embed":
-        """Set the embed thumbnail."""
-        self.thumbnail = EmbedImage(url=url)
-        return self
-
-    def add_field(
-        self,
-        name: str,
-        value: str,
-        *,
-        inline: bool = False,
-    ) -> "Embed":
-        """Add a field to the embed (max 25 fields).
-
-        Args:
-            name: Field name (max 256 chars).
-            value: Field value (max 1024 chars).
-            inline: Whether the field is inline.
-        """
-        if len(self.fields) < 25:
-            self.fields.append(
-                EmbedField(name=name[:256], value=value[:1024], inline=inline)
-            )
-        return self
-
-    def clear_fields(self) -> "Embed":
-        """Remove all fields."""
-        self.fields.clear()
-        return self
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialise to a Discord API-compatible dict."""
-        d: Dict[str, Any] = {}
-        if self.title:
-            d["title"] = self.title
-        if self.description:
-            d["description"] = self.description
-        if self.url:
-            d["url"] = self.url
-        if self.color is not None:
-            d["color"] = self.color
-        if self.timestamp:
-            d["timestamp"] = self.timestamp
-        if self.author:
-            d["author"] = self.author.to_dict()
-        if self.footer:
-            d["footer"] = self.footer.to_dict()
-        if self.image:
-            d["image"] = self.image.to_dict()
-        if self.thumbnail:
-            d["thumbnail"] = self.thumbnail.to_dict()
-        if self.fields:
-            d["fields"] = [f.to_dict() for f in self.fields]
-        return d
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Embed":
-        """Parse an embed from a raw API response dict."""
-        embed = cls(
-            title=data.get("title"),
-            description=data.get("description"),
-            url=data.get("url"),
-            color=data.get("color"),
-            timestamp=data.get("timestamp"),
-        )
-        if "author" in data:
-            embed.author = EmbedAuthor.from_dict(data["author"])
-        if "footer" in data:
-            embed.footer = EmbedFooter.from_dict(data["footer"])
-        if "image" in data:
-            embed.image = EmbedImage.from_dict(data["image"])
-        if "thumbnail" in data:
-            embed.thumbnail = EmbedImage.from_dict(data["thumbnail"])
-        embed.fields = [EmbedField.from_dict(f) for f in data.get("fields", [])]
-        return embed
-
-    def __repr__(self) -> str:
-        return f"<Embed title={self.title!r} fields={len(self.fields)}>"
-
-    def __len__(self) -> int:
-        """Total character count of the embed (Discord limits sum to 6000)."""
-        total = 0
-        if self.title:
-            total += len(self.title)
-        if self.description:
-            total += len(self.description)
-        if self.author:
-            total += len(self.author.name)
-        if self.footer:
-            total += len(self.footer.text)
-        for f in self.fields:
-            total += len(f.name) + len(f.value)
-        return total
+# Embed classes have been moved to models.embed
 
 
 # ─── Attachment ───────────────────────────────────────────────────────────────
@@ -519,6 +234,7 @@ class Message:
     webhook_id: Optional[str] = None
     thread: Optional[Dict[str, Any]] = None
     components: List[Dict[str, Any]] = field(default_factory=list)
+    _client: Optional[Any] = field(default=None, repr=False)
 
     # ─── Computed Properties ─────────────────────────────────────────────────
 
@@ -551,6 +267,42 @@ class Message:
             content = content.replace(f"<@{user.id}>", f"@{user.display_name}")
             content = content.replace(f"<@!{user.id}>", f"@{user.display_name}")
         return content
+    
+    @property
+    def channel(self) -> "MessageChannel":
+        """Get the channel with send/reply methods.
+        
+        Returns a MessageChannel object that has send() and reply() methods.
+        """
+        return MessageChannel(self.channel_id, self.guild_id, self._client)
+    
+    async def send(self, content: Optional[str] = None, **kwargs: Any) -> "Message":
+        """Send a message to this message's channel.
+        
+        Shortcut for message.channel.send().
+        
+        Args:
+            content: Message content.
+            **kwargs: Additional arguments (embed, tts, etc.)
+            
+        Returns:
+            The created Message.
+        """
+        return await self.channel.send(content, **kwargs)
+    
+    async def reply(self, content: Optional[str] = None, **kwargs: Any) -> "Message":
+        """Reply to this message.
+        
+        Shortcut for message.channel.send() with reply_to.
+        
+        Args:
+            content: Reply content.
+            **kwargs: Additional arguments.
+            
+        Returns:
+            The created reply Message.
+        """
+        return await self.channel.reply(self.id, content, **kwargs)
 
     # ─── Serialisation ───────────────────────────────────────────────────────
 
@@ -601,6 +353,7 @@ class Message:
             webhook_id=data.get("webhook_id"),
             thread=data.get("thread"),
             components=data.get("components", []),
+            _client=data.get("_client"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -642,3 +395,69 @@ class Message:
 
     def __hash__(self) -> int:
         return hash(self.id)
+
+
+# ─── MessageChannel Helper ─────────────────────────────────────────────────────
+
+class MessageChannel:
+    """Helper class for message.channel.send() and message.channel.reply().
+    
+    This provides discord.py-like channel methods on Message objects.
+    """
+    
+    def __init__(self, channel_id: str, guild_id: Optional[str], client: Optional[Any]):
+        self.id = channel_id
+        self.guild_id = guild_id
+        self._client = client
+    
+    async def send(self, content: Optional[str] = None, **kwargs: Any) -> Message:
+        """Send a message to this channel.
+        
+        Args:
+            content: Message content.
+            **kwargs: Additional arguments (embed, tts, etc.)
+            
+        Returns:
+            The created Message.
+        """
+        if self._client is None:
+            raise RuntimeError("No client attached to message. Cannot send.")
+        
+        result = await self._client.messages.send(self.id, content=content, **kwargs)
+        # Attach client to the new message
+        result._client = self._client
+        return result
+    
+    async def reply(self, message_id: str, content: Optional[str] = None, **kwargs: Any) -> Message:
+        """Reply to a message in this channel.
+        
+        Args:
+            message_id: Message ID to reply to.
+            content: Reply content.
+            **kwargs: Additional arguments.
+            
+        Returns:
+            The created reply Message.
+        """
+        if self._client is None:
+            raise RuntimeError("No client attached to message. Cannot reply.")
+        
+        result = await self._client.messages.reply(self.id, message_id, content=content, **kwargs)
+        result._client = self._client
+        return result
+    
+    async def get_message(self, message_id: str) -> Message:
+        """Fetch a message from this channel.
+        
+        Args:
+            message_id: Message ID to fetch.
+            
+        Returns:
+            The Message.
+        """
+        if self._client is None:
+            raise RuntimeError("No client attached to message. Cannot fetch.")
+        
+        result = await self._client.messages.get(self.id, message_id)
+        result._client = self._client
+        return result

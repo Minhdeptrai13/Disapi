@@ -1,5 +1,5 @@
 """
-Type definitions for disapi.
+Type definitions for Dapi.
 
 This module contains all type aliases, TypedDicts, and Protocol definitions.
 """

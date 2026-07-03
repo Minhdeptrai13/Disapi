@@ -1,5 +1,5 @@
 """
-Utility functions and helpers for disapi.
+Utility functions and helpers for Dapi.
 
 This module contains utility functions, decorators, and helper classes.
 """
@@ -90,7 +90,7 @@ __all__ = [
 
 
 # Setup logger
-_logger = logging.getLogger('disapi')
+_logger = logging.getLogger('dapi')
 
 
 # Snowflake utilities
@@ -781,7 +781,7 @@ def setup_logging(
     file: str = None
 ) -> None:
     """
-    Setup logging for disapi.
+    Setup logging for Dapi.
 
     Args:
         level: Logging level.
@@ -794,7 +794,7 @@ def setup_logging(
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter(format))
 
-    logger = logging.getLogger('disapi')
+    logger = logging.getLogger('dapi')
     logger.setLevel(level)
     logger.addHandler(handler)
 
@@ -815,8 +815,8 @@ def get_logger(name: str = None) -> logging.Logger:
         Logger instance.
     """
     if name:
-        return logging.getLogger(f'disapi.{name}')
-    return logging.getLogger('disapi')
+        return logging.getLogger(f'dapi.{name}')
+    return logging.getLogger('dapi')
 
 
 # Decorators

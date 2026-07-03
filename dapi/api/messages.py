@@ -5,10 +5,13 @@ api/messages.py — Discord Messages API
 from __future__ import annotations
 
 import asyncio
+import os
+import mimetypes
 from typing import Any, Dict, List, Optional, Union
 
 from ..http_client import HTTPClient, Route
-from ..models.message import Attachment, Embed, Message, MessageReference
+from ..models.message import Attachment, Message, MessageReference
+from ..models.embed import Embed
 from ..utils import generate_nonce, split_message
 from ..constants import MAX_MESSAGE_LENGTH
 from ..exceptions import InvalidArgument
@@ -72,8 +75,14 @@ class MessagesAPI:
         if flags:
             payload["flags"] = flags
 
-        if content:
+        if not any((content, embed, embeds, stickers, files, components)):
+            raise InvalidArgument("Message", "Cannot send an empty message. Provide content, embed, files, or stickers.")
+
+        if content is not None:
             payload["content"] = content[:MAX_MESSAGE_LENGTH]
+        elif embed or embeds or files or stickers:
+            # Selfbots sometimes need an explicit empty string content when sending only embeds/attachments
+            payload["content"] = ""
 
         # Resolve embeds
         all_embeds: Optional[List[Dict]] = None

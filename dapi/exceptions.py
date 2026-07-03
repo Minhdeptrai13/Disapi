@@ -2,11 +2,11 @@
 exceptions.py — Custom Exception Hierarchy
 ==========================================
 
-Full exception hierarchy for disapi. All exceptions trace back to
-``DisapiException``, enabling broad or specific ``except`` clauses.
+Full exception hierarchy for Dapi. All exceptions trace back to
+``DapiException``, enabling broad or specific ``except`` clauses.
 
 Hierarchy:
-    DisapiException
+    DapiException
     ├── ConfigurationError
     ├── InvalidToken
     ├── InvalidArgument
@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 
 __all__: list[str] = [
-    "DisapiException",
+    "DapiException",
     "ConfigurationError",
     "InvalidToken",
     "InvalidArgument",
@@ -59,17 +59,17 @@ __all__: list[str] = [
 #   Base
 # ═══════════════════════════════════════════════════════════════════════════
 
-class DisapiException(Exception):
-    """Base exception for all disapi errors.
+class DapiException(Exception):
+    """Base exception for all Dapi errors.
 
     All exceptions raised by this library inherit from here, so you can
-    catch everything with ``except DisapiException``.
+    catch everything with ``except DapiException``.
 
     Attributes:
         message (str): Human-readable error description.
     """
 
-    def __init__(self, message: str = "An error occurred in disapi") -> None:
+    def __init__(self, message: str = "An error occurred in Dapi") -> None:
         self.message = message
         super().__init__(message)
 
@@ -80,7 +80,7 @@ class DisapiException(Exception):
         return f"<{self.__class__.__name__}: {self.message!r}>"
 
 
-class ConfigurationError(DisapiException):
+class ConfigurationError(DapiException):
     """Raised when the client is misconfigured.
 
     Example:
@@ -91,7 +91,7 @@ class ConfigurationError(DisapiException):
         super().__init__(f"ConfigurationError: {message}")
 
 
-class InvalidToken(DisapiException):
+class InvalidToken(DapiException):
     """Raised when the supplied token has an invalid format.
 
     Note:
@@ -104,7 +104,7 @@ class InvalidToken(DisapiException):
         super().__init__(f"InvalidToken: {message}")
 
 
-class InvalidArgument(DisapiException):
+class InvalidArgument(DapiException):
     """Raised when a function receives an invalid argument value.
 
     Attributes:
@@ -116,14 +116,14 @@ class InvalidArgument(DisapiException):
         super().__init__(f"InvalidArgument '{argument}': {message}")
 
 
-class LoginFailure(DisapiException):
+class LoginFailure(DapiException):
     """Raised when ``client.login()`` cannot authenticate successfully."""
 
     def __init__(self, message: str = "Login failed") -> None:
         super().__init__(f"LoginFailure: {message}")
 
 
-class MaxConcurrencyReached(DisapiException):
+class MaxConcurrencyReached(DapiException):
     """Raised when a command exceeds its concurrency limit.
 
     Attributes:
@@ -137,7 +137,7 @@ class MaxConcurrencyReached(DisapiException):
         super().__init__(f"MaxConcurrency for '{name}': limit of {limit} reached")
 
 
-class ResponseCorrupt(DisapiException):
+class ResponseCorrupt(DapiException):
     """Raised when Discord returns malformed or unexpected response data."""
 
     def __init__(self, message: str = "Response data is corrupt or malformed") -> None:
@@ -148,7 +148,7 @@ class ResponseCorrupt(DisapiException):
 #   Discord API Errors
 # ═══════════════════════════════════════════════════════════════════════════
 
-class DiscordException(DisapiException):
+class DiscordException(DapiException):
     """Base for all Discord API errors.
 
     Attributes:

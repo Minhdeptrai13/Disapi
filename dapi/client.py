@@ -1,6 +1,6 @@
-"""
-disapi/client.py — Main Discord Client (Async & Sync) — ELITE v4.0
-==================================================================
+
+dapi/client.py — Main Discord Client (Async & Sync) — ELITE v4.0
+
 
 Production-grade async-first client with advanced event system, 
 connection pooling, health checks, and comprehensive lifecycle management.
@@ -38,12 +38,14 @@ from .api.reactions import ReactionsAPI
 from .api.relationships import RelationshipsAPI
 from .api.presence import PresenceAPI
 from .api.misc import MiscAPI
+from .api.attachments import AttachmentsAPI
 from .models.user import User
 from .models.message import Message
 from .models.guild import Guild
 from .models.channel import Channel
+from .models.embed import Embed
 from .exceptions import (
-    DisapiException,
+    DapiException,
     InvalidToken,
     LoginFailure,
     ConnectionClosed,
@@ -106,6 +108,8 @@ class ClientOptions:
         health_check_interval: Health check interval in seconds (default: 30).
         max_reconnect_backoff: Max backoff for exponential retry (default: 120s).
         session_cache_size: Max cached session info (default: 100).
+        fingerprint_rotation: Enable fingerprint rotation for anti-detection (default: True).
+        rotation_interval: Requests between fingerprint rotations (default: 100).
     """
 
     def __init__(
@@ -123,6 +127,8 @@ class ClientOptions:
         health_check_interval: int = 30,
         max_reconnect_backoff: int = 120,
         session_cache_size: int = 100,
+        fingerprint_rotation: bool = True,
+        rotation_interval: int = 100,
     ):
         self.proxy = proxy
         self.timeout = timeout
@@ -138,6 +144,8 @@ class ClientOptions:
         self.health_check_interval = health_check_interval
         self.max_reconnect_backoff = max_reconnect_backoff
         self.session_cache_size = session_cache_size
+        self.fingerprint_rotation = fingerprint_rotation
+        self.rotation_interval = rotation_interval
 
 
 class Client:
@@ -201,6 +209,17 @@ class Client:
         self._event_handlers: Dict[str, List[Callable]] = {}
         self._event_lock = asyncio.Lock()
         
+        # Wait system for wait_for
+        self._waiters: Dict[str, List[asyncio.Future]] = {}
+        self._wait_lock = asyncio.Lock()
+        
+        # Ready state
+        self._ready_event = asyncio.Event()
+        
+        # Command system
+        self._commands: Dict[str, Callable] = {}
+        self._command_prefix: Union[str, List[str]] = "!"
+        
         # Initialize HTTP
         self._rate_limiter = RateLimiter()
         self._http = HTTPClient(
@@ -208,6 +227,8 @@ class Client:
             proxy=self._options.proxy,
             timeout=self._options.timeout,
             max_retries=self._options.max_retries,
+            fingerprint_rotation=self._options.fingerprint_rotation,
+            rotation_interval=self._options.rotation_interval,
         )
         
         # Initialize Gateway
@@ -234,6 +255,7 @@ class Client:
         self.relationships = RelationshipsAPI(self._http)
         self.presence = PresenceAPI(self._http)
         self.misc = MiscAPI(self._http)
+        self.attachments = AttachmentsAPI(self._http)
         
         setup_logging(self._options.log_level)
         logger.debug(f"Client initialized (gateway={'enabled' if self._gateway else 'disabled'})")
@@ -318,7 +340,7 @@ class Client:
             LoginFailure: If login fails.
         """
         if self._closed:
-            raise DisapiException("Client not connected. Call .connect() first.")
+            raise DapiException("Client not connected. Call .connect() first.")
         
         try:
             logger.debug("Authenticating...")
@@ -380,22 +402,48 @@ class Client:
         except Exception as e:
             logger.error(f"Reconnection failed: {e}")
 
-    def event(self, event_type: str) -> Callable:
+    def event(self, event_type: Optional[str] = None) -> Callable:
         """Register event listener (decorator).
         
+        Supports both discord.py style (no argument, uses function name)
+        and explicit event type.
+        
         Args:
-            event_type: Event type (e.g., EventType.MESSAGE_CREATE)
+            event_type: Event type (e.g., EventType.MESSAGE_CREATE or None for auto-detect)
             
         Returns:
             Decorator function.
         
         Example:
-            @client.event(EventType.MESSAGE_CREATE)
-            async def on_message(data):
-                print(data['content'])
+            @client.event
+            async def on_message(message):
+                print(message.content)
+                
+            @client.event(EventType.READY)
+            async def on_ready(data):
+                print("Ready!")
         """
         def decorator(func: Callable) -> Callable:
-            self.on(event_type)(func)
+            # If event_type is None, extract from function name
+            evt = event_type
+            if evt is None:
+                func_name = func.__name__
+                if func_name.startswith("on_"):
+                    evt = func_name[3:].upper()
+                    # Map common event names to EventType constants
+                    evt_map = {
+                        "MESSAGE_CREATE": "MESSAGE_CREATE",
+                        "READY": "READY",
+                        "GUILD_CREATE": "GUILD_CREATE",
+                        "MESSAGE_DELETE": "MESSAGE_DELETE",
+                        "PRESENCE_UPDATE": "PRESENCE_UPDATE",
+                        "TYPING_START": "TYPING_START",
+                    }
+                    evt = evt_map.get(evt, evt)
+                else:
+                    evt = func_name.upper()
+            
+            self.on(evt)(func)
             return func
         return decorator
 
@@ -419,12 +467,42 @@ class Client:
     async def _dispatch_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Dispatch event to all registered handlers."""
         logger.debug(f"Dispatching event: {event_type}")
+<<<<<<< HEAD:disapi/client.py
+=======
+        
+        # Set ready event
+        if event_type == "READY":
+            self._ready_event.set()
+        
+        # Handle wait_for futures
+        async with self._wait_lock:
+            if event_type in self._waiters:
+                for future in self._waiters[event_type][:]:
+                    if not future.done():
+                        future.set_result(data)
+                self._waiters[event_type].clear()
+        
+>>>>>>> c43f783 (upd):dapi/client.py
         if event_type not in self._event_handlers:
             logger.debug(f"No handlers for {event_type}")
             return
         
         handlers = self._event_handlers[event_type]
         tasks = []
+        
+        # Convert data to Message object for MESSAGE_CREATE events
+        message_obj = None
+        if event_type == "MESSAGE_CREATE":
+            try:
+                message_obj = Message.from_dict(data)
+                message_obj._client = self  # Attach client for channel methods
+                data = message_obj
+            except Exception as e:
+                logger.warning(f"Failed to convert message: {e}")
+        
+        # Process commands if this is a MESSAGE_CREATE event
+        if event_type == "MESSAGE_CREATE" and message_obj:
+            await self._process_commands(message_obj)
         
         for handler in handlers:
             try:
@@ -516,7 +594,145 @@ class Client:
     def latency(self) -> float:
         """Get estimated latency in seconds."""
         return self._latency
-
+    
+    async def wait_until_ready(self) -> None:
+        """Wait until the client is ready (READY event received).
+        
+        This is a discord.py-style convenience method.
+        """
+        await self._ready_event.wait()
+    
+    async def wait_for(
+        self,
+        event: str,
+        *,
+        check: Optional[Callable[[Any], bool]] = None,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """Wait for a specific event to occur.
+        
+        This is a discord.py-style method for waiting for events.
+        
+        Args:
+            event: The event name to wait for (e.g., 'MESSAGE_CREATE').
+            check: Optional predicate function to filter events.
+            timeout: Maximum time to wait in seconds (None = no timeout).
+            
+        Returns:
+            The event data that passed the check.
+            
+        Raises:
+            asyncio.TimeoutError: If timeout is reached.
+        """
+        future = asyncio.Future()
+        
+        async with self._wait_lock:
+            if event not in self._waiters:
+                self._waiters[event] = []
+            self._waiters[event].append(future)
+        
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            
+            # Apply check if provided
+            if check and not check(result):
+                # If check fails, wait for next occurrence
+                return await self.wait_for(event, check=check, timeout=timeout)
+            
+            return result
+        except asyncio.TimeoutError:
+            async with self._wait_lock:
+                if future in self._waiters.get(event, []):
+                    self._waiters[event].remove(future)
+            raise
+    
+    def command(self, name: Optional[str] = None) -> Callable:
+        """Register a command (discord.py style).
+        
+        Args:
+            name: Command name (defaults to function name)
+            
+        Returns:
+            Decorator function.
+            
+        Example:
+            @client.command()
+            async def ping(ctx):
+                await ctx.reply("Pong!")
+        """
+        def decorator(func: Callable) -> Callable:
+            cmd_name = name or func.__name__
+            self._commands[cmd_name] = func
+            logger.debug(f"Registered command: {cmd_name}")
+            return func
+        return decorator
+    
+    async def _process_commands(self, message: Message) -> None:
+        """Process commands from a message."""
+        if not message.content:
+            return
+        
+        prefixes = [self._command_prefix] if isinstance(self._command_prefix, str) else self._command_prefix
+        
+        for prefix in prefixes:
+            if message.content.startswith(prefix):
+                content = message.content[len(prefix):].strip()
+                parts = content.split()
+                if not parts:
+                    continue
+                
+                cmd_name = parts[0].lower()
+                if cmd_name in self._commands:
+                    # Create context with prefix
+                    from .ext.commands import Context
+                    ctx = Context(
+                        self, 
+                        message, 
+                        self._commands[cmd_name], 
+                        parts[1:],
+                        prefix=prefix,
+                        invoked_with=cmd_name
+                    )
+                    
+                    # Invoke command
+                    try:
+                        await self._commands[cmd_name](ctx)
+                    except Exception as e:
+                        logger.error(f"Error in command {cmd_name}: {e}")
+                break
+    
+    def run(self) -> None:
+        """Run the client (blocking mode).
+        
+        This is the main entry point for discord.py-style usage.
+        
+        Example:
+            client = Client("token")
+            
+            @client.event
+            async def on_ready():
+                print("Ready!")
+            
+            client.run()
+        """
+        async def runner():
+            async with self:
+                await self.login()
+                if self._gateway:
+                    await self._gateway.connect()
+                    # Keep alive
+                    while not self._closed:
+                        await asyncio.sleep(1)
+        
+        try:
+            asyncio.run(runner())
+        except KeyboardInterrupt:
+            logger.info("Client shutting down...")
+        finally:
+            try:
+                asyncio.get_event_loop().run_until_complete(self.close())
+            except:
+                pass
 
 class SyncClient:
     """Synchronous wrapper around async Client.

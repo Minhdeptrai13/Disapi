@@ -14,12 +14,14 @@ class UsersAPI:
     def __init__(self, http: HTTPClient):
         self._http = http
 
-    async def get_current(self) -> User:
+    async def get_current_user(self) -> User:
         """Get current user.
 
         Returns:
             Current User object.
         """
+        # Note: If 403 occurs, ensure the HTTP client sends valid x-super-properties,
+        # User-Agent, and avoids missing headers.
         data = await self._http.get('/users/@me')
         return User.from_dict(data)
 
@@ -35,32 +37,45 @@ class UsersAPI:
         data = await self._http.get(f'/users/{user_id}')
         return User.from_dict(data)
 
-    async def modify_current(
+    async def edit(
         self,
         username: Optional[str] = None,
         avatar: Optional[str] = None,
         banner: Optional[str] = None,
+        bio: Optional[str] = None,
     ) -> User:
-        """Modify current user.
+        """Modify current user's profile (edit).
 
         Args:
             username: New username.
             avatar: New avatar (base64 data URI).
             banner: New banner (base64 data URI).
+            bio: New bio/about me.
 
         Returns:
             Modified User.
         """
         payload: Dict[str, Any] = {}
-        if username:
+        if username is not None:
             payload['username'] = username
         if avatar is not None:
             payload['avatar'] = avatar
         if banner is not None:
             payload['banner'] = banner
+        if bio is not None:
+            payload['bio'] = bio
 
-        data = await self._http.patch('/users/@me', json=payload)
+        data = await self._http.patch('/users/@me', json_payload=payload)
         return User.from_dict(data)
+
+    async def get_relationships(self) -> List[Dict[str, Any]]:
+        """Get all relationships (friends, blocked, outgoing/incoming requests).
+
+        Returns:
+            List of relationship objects.
+        """
+        # Selfbots usually fetch relationships from /users/@me/relationships
+        return await self._http.get('/users/@me/relationships')
 
     async def get_current_guilds(
         self,
